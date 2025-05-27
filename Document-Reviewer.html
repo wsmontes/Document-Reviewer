@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Meta-Prompt Canvas</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="stylesheet" href="css/agent-styles.css">
+  <!-- Initialize namespace first -->
+  <script src="js/core/namespace.js"></script>
+  <!-- Loading script next -->
+  <script src="js/utils/loading.js"></script>
+</head>
+<body>
+  <header>Meta-Prompt Canvas</header>
+  <div id="server-status">
+    <div class="status-indicator status-checking"></div>
+    <span id="status-text">Checking server...</span>
+    <button id="retry-connection" style="display: none;">Retry</button>
+    <div id="status-details" class="hidden">
+      <div class="status-detail">Endpoint: <span id="endpoint-url"></span></div>
+      <div class="status-detail">Model: <span id="model-name"></span></div>
+      <div class="status-detail">Last check: <span id="last-check-time"></span></div>
+      <div class="status-detail"><a href="#" id="configure-api-btn">Configure API</a></div>
+    </div>
+  </div>
+  
+  <div id="api-config-modal" class="modal">
+    <div class="modal-content">
+      <span class="close-btn">&times;</span>
+      <h2>Configure API Connection</h2>
+      <form id="api-config-form">
+        <div class="form-group">
+          <label for="api-endpoint">API Endpoint:</label>
+          <input type="text" id="api-endpoint" placeholder="http://localhost:1234">
+        </div>
+        <div class="form-group">
+          <label for="api-model">Model Name:</label>
+          <input type="text" id="api-model" placeholder="google/gemma-3-4b">
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="primary-btn">Save Configuration</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  
+  <div class="main-container">
+    <!-- User interaction area -->
+    <div id="user-container">
+      <div id="document-upload-area">
+        <div class="upload-container">
+          <label for="pdf-upload" class="upload-label">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+            <span>Upload Documents</span>
+          </label>
+          <input type="file" id="pdf-upload" accept=".pdf,.docx,.doc,.epub,.txt,.json,.xlsx,.xls,.csv,.zip" multiple class="file-input">
+        </div>
+        <div id="document-status"></div>
+        <div id="documents-list" class="hidden"></div>
+      </div>
+      <div id="chat-history"></div>
+      <form id="input-area" autocomplete="off">
+        <textarea id="user-input" rows="2" placeholder="What would you like to explore about the document? The AI will create its own prompting strategy..." required></textarea>
+        <button id="submit-btn" type="submit">Submit</button>
+      </form>
+      
+      <div id="settings-bar">
+        <div class="settings-control">
+          <label for="temperature">Temperature:</label>
+          <!-- Updated to include 0 (Auto) as an option -->
+          <input type="range" id="temperature" min="0" max="100" value="0" step="5">
+          <span id="temp-display" class="auto-temp">Auto</span>
+          <div class="ai-decides-tooltip">AI decides optimal temperature</div>
+        </div>
+        <div class="settings-control">
+          <span id="complexity-display">Complexity: <span class="complexity-indicator complexity-adaptive">Auto</span></span>
+        </div>
+        <div class="settings-control">
+          <label for="determination">Determination:</label>
+          <!-- Updated to include 0 (Auto) as an option -->
+          <input type="range" id="determination" min="0" max="5" value="5" step="1">
+          <span id="determination-display" class="auto-determination">Auto</span>
+          <div class="ai-decides-tooltip">AI decides how thorough to be</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Canvas and meta-prompt visualization -->
+    <div id="canvas-container">
+      <div id="canvas-header">
+        <span>Meta-Prompt Visualization</span>
+        <div class="meta-stats">
+          <div class="meta-stat" id="prompt-count">Prompts: 0</div>
+          <div class="meta-stat" id="token-usage">Tokens: 0</div>
+          <div class="meta-stat" id="meta-quality">Quality: N/A</div>
+          <div class="meta-stat" id="confidence-score">Confidence: <span class="confidence-indicator confidence-medium">--</span></div>
+        </div>
+      </div>
+      <div id="canvas">
+        <!-- Document view -->
+        <div id="document-view-container">
+          <div id="document-view-header">
+            <span>Document View</span>
+            <button id="toggle-document-btn">Hide</button>
+          </div>
+          <div id="document-content"></div>
+        </div>
+
+        <!-- Meta-prompt process visualization -->
+        <div id="meta-process">
+          <div id="meta-process-header">
+            <div id="meta-process-title">Meta-Prompt Process</div>
+            <div id="meta-process-time"></div>
+          </div>
+          <div id="meta-process-stages"></div>
+          <div id="determination-indicator">
+            <div class="determination-label">Determination Progress</div>
+            <div class="determination-progress">
+              <div class="determination-bar" id="determination-bar"></div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Response area -->
+        <div id="response-container">
+          <h3>Response</h3>
+          <div id="response-content">Upload a document and submit a query to start the meta-prompt process...</div>
+        </div>
+        
+        <!-- Debug panel -->
+        <div id="debug-panel">
+          <h4>Debug Information</h4>
+          <div id="debug-content">Connection to model: Initializing...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+  </script>
+  <!-- External libraries -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.5.1/mammoth.browser.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  
+  <!-- Modular Script Files - Load in proper dependency order -->
+  <script src="js/core/namespace.js"></script>
+  <script src="js/utils/loading.js"></script>
+  <script src="js/utils/helpers.js"></script>
+  <script src="js/utils/debug-logger.js"></script>
+  <script src="js/core/config.js"></script>
+  <script src="js/ui/ui-controller.js"></script>
+  <script src="js/services/api-service.js"></script>
+  <script src="js/services/document-processor.js"></script>
+  <script src="js/meta-prompt/segmentation.js"></script>
+  <script src="js/agents/agent-manager.js"></script>
+  <script src="js/meta-prompt/meta-engine.js"></script>
+  <script src="js/core/app.js"></script>
+  
+  <script>
+    // Remove the required attribute from the textarea when document is uploaded
+    document.addEventListener('DOMContentLoaded', function() {
+      // Check periodically if a document has been uploaded
+      setInterval(() => {
+        const hasDocument = window.DocumentReviewer && 
+                           window.DocumentReviewer.DocumentProcessor && 
+                           window.DocumentReviewer.DocumentProcessor.getCurrentDocument && 
+                           window.DocumentReviewer.DocumentProcessor.getCurrentDocument().hasDocument;
+        
+        if (hasDocument) {
+          // Make the input field optional
+          document.getElementById('user-input').removeAttribute('required');
+          document.getElementById('user-input').classList.add('optional');
+          document.getElementById('input-area').classList.add('has-document');
+        } else {
+          // Make the input field required
+          document.getElementById('user-input').setAttribute('required', '');
+          document.getElementById('user-input').classList.remove('optional');
+          document.getElementById('input-area').classList.remove('has-document');
+        }
+      }, 1000);
+    });
+  </script>
+</body>
+</html>
