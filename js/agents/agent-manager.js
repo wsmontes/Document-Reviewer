@@ -192,17 +192,22 @@
     
     const coordinator = getAgent(systemAgents.coordinator);
     
-    // Ask the coordinator to determine which agents we need
+    // Ask the coordinator to determine which agents we need - enhanced to allow full LLM control
     const agentSelectionPrompt = `
       TASK ANALYSIS REQUEST
       
-      I need you to analyze this task and determine which specialized agents should handle it:
+      I need you to analyze this task and determine the optimal specialist agents to handle it.
       
       TASK: ${task}
       
       ${context.query ? `USER QUERY: ${context.query}` : ''}
       
       ${context.additionalContext || ''}
+      ${context.customAgentHint ? `CUSTOM AGENT SUGGESTION: ${context.customAgentHint}` : ''}
+      ${context.previousOutput ? `PREVIOUS OUTPUT: ${context.previousOutput.substring(0, 500)}... [truncated]` : ''}
+      
+      YOU HAVE FULL AUTONOMY: You can decide exactly which agents should be created, how they should be specialized,
+      and how they should work together for optimal results. Don't be constrained by conventional approaches.
       
       Available agent types:
       ${Object.keys(agentTemplates)
@@ -213,14 +218,13 @@
       For each recommended agent:
       1. Specify the agent type (must be one of the available types listed above)
       2. Explain why this specific agent is needed for this task
-      3. Suggest any specialization that would help the agent be more effective
-      
-      IMPORTANT: Use ONLY the exact agent type keys shown in parentheses (e.g., "researcher", "writer", "critic").
-      DO NOT use the full agent names as type identifiers.
+      3. Define a highly tailored specialization that makes the agent optimized for this specific task
+      4. Assign a priority level (1=highest) to indicate the agent's importance
       
       Additionally:
-      - Indicate if you think a new specialized agent type is needed that's not in the list
-      - If so, describe what this agent should be able to do and why it's necessary
+      - If you think a completely new specialized agent type is needed, describe it in detail
+      - You can recommend as many agents as you believe necessary for optimal results
+      - Consider creating complementary agent teams that can work together effectively
       
       Return your recommendation in JSON format only:
       {
@@ -228,11 +232,20 @@
           {
             "type": "agent_type_key",
             "reason": "why this agent is needed",
-            "specialization": "suggested specialization"
+            "specialization": "highly tailored specialization description",
+            "priority": 1-5
           }
         ],
         "needs_new_agent": true/false,
-        "new_agent_description": "if needed, description of new agent capabilities"
+        "new_agent_descriptions": [
+          {
+            "name": "suggested name for new agent",
+            "purpose": "detailed description of what this new agent should do",
+            "specialization": "specific focus area for this agent",
+            "justification": "why this new agent type is needed"
+          }
+        ],
+        "suggested_workflow": "brief description of how these agents should work together"
       }
     `;
     
@@ -248,13 +261,6 @@
         const jsonMatch = agentSelectionResult.response.match(/\{[\s\S]*\}/);
         const jsonStr = jsonMatch ? jsonMatch[0] : agentSelectionResult.response;
         selection = JSON.parse(window.DocumentReviewer.Helpers.sanitizeJsonString(jsonStr));
-        
-        // Log and validate the agent selection
-        console.log("Agent selection result:", selection);
-        
-        if (!selection.recommended_agents || !Array.isArray(selection.recommended_agents)) {
-          throw new Error("Invalid agent selection format: missing or invalid recommended_agents array");
-        }
       } catch (parseError) {
         console.error("Error parsing agent selection:", parseError);
         throw new Error("Failed to parse agent selection response");
@@ -263,74 +269,66 @@
       // Initialize the list of agents to use
       const agentsToUse = [];
       
+      // Sort recommended agents by priority
+      if (selection.recommended_agents) {
+        selection.recommended_agents.sort((a, b) => (a.priority || 3) - (b.priority || 3));
+      }
+      
       // Create recommended agents if they don't already exist
-      for (const recommendation of selection.recommended_agents) {
-        // Validate agent type
-        const agentType = recommendation.type ? recommendation.type.trim().toLowerCase() : null;
-        
-        if (!agentType) {
-          console.warn("Missing agent type in recommendation:", recommendation);
-          continue; // Skip this recommendation
-        }
-        
-        if (!agentTemplates[agentType]) {
-          console.warn(`Unknown agent type in recommendation: ${agentType}`, recommendation);
-          continue; // Skip this recommendation
-        }
-        
+      for (const recommendation of selection.recommended_agents || []) {
         // Check if we already have an agent of this type with similar specialization
         const existingAgent = activeAgents.find(agent => 
-          agent.type === agentType && 
+          agent.type === recommendation.type && 
           (!recommendation.specialization || 
            (agent.specialization && agent.specialization.includes(recommendation.specialization)))
         );
         
-        if (existingAgent) {
-          // Use existing agent
+        if (existingAgent && !context.preferTailored) {
+          // Use existing agent only if we don't prefer tailored agents
           agentsToUse.push(existingAgent.id);
           window.DocumentReviewer.UI.updateDebugInfo(`Using existing ${existingAgent.name} (${existingAgent.id})`);
         } else {
+          // Create new agent with tailored specialization
           try {
-            // Create new agent
-            const newAgent = createAgent(agentType, {
-              specialization: recommendation.specialization
+            const newAgent = createAgent(recommendation.type, {
+              specialization: recommendation.specialization || 
+                `Specialized for: ${context.query || task.substring(0, 50)}...`
             });
             agentsToUse.push(newAgent.id);
-            window.DocumentReviewer.UI.updateDebugInfo(`Created new ${newAgent.name} (${newAgent.id}) with specialization: ${recommendation.specialization || 'none'}`);
+            window.DocumentReviewer.UI.updateDebugInfo(`Created new ${newAgent.name} (${newAgent.id}) with specialization: ${newAgent.specialization || 'none'}`);
           } catch (createError) {
-            console.error(`Error creating agent of type ${agentType}:`, createError);
-            window.DocumentReviewer.UI.updateDebugInfo(`Failed to create agent of type ${agentType}: ${createError.message}`);
+            console.error(`Error creating agent of type ${recommendation.type}:`, createError);
+            window.DocumentReviewer.UI.updateDebugInfo(`Failed to create agent of type ${recommendation.type}: ${createError.message}`);
           }
         }
       }
       
-      // Check if we need a new agent type
-      if (selection.needs_new_agent && systemAgents.factory) {
-        window.DocumentReviewer.UI.updateDebugInfo("Need for new agent type detected. Consulting Agent Factory...");
+      // Create custom agents if needed
+      if (selection.needs_new_agent && selection.new_agent_descriptions && selection.new_agent_descriptions.length > 0 && systemAgents.factory) {
+        window.DocumentReviewer.UI.updateDebugInfo(`Creating ${selection.new_agent_descriptions.length} custom agent(s)...`);
         
-        try {
-          // Ask the factory to create a new agent
-          const newAgentResult = await createCustomAgentFromFactory(
-            systemAgents.factory,
-            selection.new_agent_description,
-            context
-          );
-          
-          if (newAgentResult && newAgentResult.newAgent) {
-            agentsToUse.push(newAgentResult.newAgent.id);
+        for (const agentDesc of selection.new_agent_descriptions) {
+          try {
+            // Ask the factory to create a new agent
+            const newAgentResult = await createCustomAgentFromFactory(
+              systemAgents.factory,
+              `Create a new specialized agent:
+               Name: ${agentDesc.name}
+               Purpose: ${agentDesc.purpose}
+               Specialization: ${agentDesc.specialization}
+               Justification: ${agentDesc.justification}`,
+              context
+            );
+            
+            if (newAgentResult && newAgentResult.newAgent) {
+              agentsToUse.push(newAgentResult.newAgent.id);
+              window.DocumentReviewer.UI.updateDebugInfo(`Created custom agent: ${newAgentResult.newAgent.name}`);
+            }
+          } catch (factoryError) {
+            console.error(`Error creating custom agent "${agentDesc.name}":`, factoryError);
+            window.DocumentReviewer.UI.updateDebugInfo(`Failed to create custom agent "${agentDesc.name}": ${factoryError.message}`);
           }
-        } catch (factoryError) {
-          console.error("Error creating custom agent:", factoryError);
-          window.DocumentReviewer.UI.updateDebugInfo(`Custom agent creation failed: ${factoryError.message}`);
         }
-      }
-      
-      // Ensure we have at least one agent
-      if (agentsToUse.length === 0) {
-        // Create a default researcher agent as fallback
-        const defaultAgent = createAgent('researcher', {});
-        agentsToUse.push(defaultAgent.id);
-        window.DocumentReviewer.UI.updateDebugInfo(`No valid agents created. Using default researcher agent: ${defaultAgent.id}`);
       }
       
       return {
@@ -392,11 +390,11 @@
       throw new Error("Agent Factory not found");
     }
     
-    // Format the prompt for creating a new agent
+    // Format the prompt for creating a new agent with complete creative freedom
     const createAgentPrompt = `
       NEW AGENT CREATION REQUEST
       
-      I need you to design a new specialized agent based on these requirements:
+      Design a new highly specialized agent based on these requirements:
       
       REQUIREMENTS: ${agentRequirements}
       
@@ -404,20 +402,20 @@
       
       ${context.additionalContext || ''}
       
+      IMPORTANT DIRECTIVES:
+      
+      1. You have COMPLETE CREATIVE FREEDOM to design the most effective agent possible
+      2. Make this agent HIGHLY SPECIALIZED and precisely tailored to the specific task
+      3. The agent should have a very specific focus area - avoid generic capabilities
+      4. Design the most effective system prompt to guide the agent's behavior
+      5. Be innovative - don't be limited by conventional agent types
+      
       For this new agent, define:
-      1. A specific agent name that clearly indicates its function
+      1. A specific agent name that clearly indicates its specialized function
       2. An appropriate emoji icon that represents its function
       3. A concise description of its specialized capabilities
-      4. A detailed system prompt that will guide its behavior
-      5. A specific specialization focus for this instance
-      
-      Create an agent design that complements the existing agent types but fills the identified need.
-      
-      Existing agent types for reference:
-      ${Object.keys(agentTemplates)
-        .filter(type => !['factory', 'coordinator'].includes(type)) // Filter out system agents
-        .map(type => `- ${agentTemplates[type].name}: ${agentTemplates[type].description}`)
-        .join('\n')}
+      4. A detailed system prompt that will guide its behavior (be specific and tailored)
+      5. A very specific specialization focus for this instance
       
       Return your agent design in JSON format only:
       {
@@ -426,7 +424,7 @@
         "description": "Concise description of capabilities",
         "system_prompt": "Detailed prompt to guide agent behavior",
         "specialization": "Specific focus for this instance",
-        "reason": "Why this design meets the requirements"
+        "reasoning": "Why this design is optimal for the task"
       }
     `;
     
@@ -774,7 +772,7 @@
   }
   
   /**
-   * Run a collaboration between multiple agents
+   * Run a collaboration between multiple agents with improved flexibility
    */
   async function runAgentCollaboration(agents, task, context = {}) {
     if (!Array.isArray(agents) || agents.length === 0) {
@@ -805,10 +803,93 @@
     const finalSynthesis = {};
     
     try {
-      // Step 1: Each agent works on the task independently
-      const individualResultPromises = validAgents.map(agentId => {
-        return sendTaskToAgent(agentId, task, context)
-          .catch(error => {
+      // ENHANCED: Get collaboration approach from coordinator for multi-agent teams
+      let collaborationApproach = null;
+      if (validAgents.length > 1) {
+        try {
+          const systemAgents = initializeSystemAgents();
+          if (systemAgents.coordinator) {
+            const coordinator = getAgent(systemAgents.coordinator);
+            
+            // Get collaboration approach from coordinator
+            const collaborationPlan = await sendTaskToAgent(systemAgents.coordinator, `
+              COLLABORATION PLANNING TASK
+              
+              You need to determine the best collaboration approach for a team of agents working on this task:
+              "${task}"
+              
+              The team consists of:
+              ${validAgents.map(id => {
+                const agent = getAgent(id);
+                return `- ${agent.name} (${agent.type})${agent.specialization ? ': ' + agent.specialization : ''}`;
+              }).join('\n')}
+              
+              Determine:
+              1. How these agents should collaborate (sequential, parallel, or hybrid approach)
+              2. What information should be shared between agents
+              3. How to synthesize their individual outputs
+              
+              Return your recommendation in JSON format only:
+              {
+                "approach": "sequential|parallel|hybrid",
+                "workflow": "description of recommended agent collaboration",
+                "synthesis_strategy": "how to combine the agent outputs"
+              }
+            `, context);
+            
+            try {
+              const jsonMatch = collaborationPlan.response.match(/\{[\s\S]*\}/);
+              const jsonStr = jsonMatch ? jsonMatch[0] : collaborationPlan.response;
+              collaborationApproach = JSON.parse(window.DocumentReviewer.Helpers.sanitizeJsonString(jsonStr));
+            } catch (jsonError) {
+              console.error("Error parsing collaboration plan:", jsonError);
+            }
+          }
+        } catch (planError) {
+          console.error("Error getting collaboration plan:", planError);
+        }
+      }
+      
+      // Default to parallel approach if planning failed
+      const approach = collaborationApproach?.approach || "parallel";
+      
+      // Step 1: Have each agent work on the task according to the decided approach
+      let individualResults;
+      
+      if (approach === "sequential") {
+        // Sequential approach: each agent builds on the previous agent's work
+        individualResults = [];
+        let currentOutput = "";
+        
+        for (let i = 0; i < validAgents.length; i++) {
+          const agentId = validAgents[i];
+          const agent = getAgent(agentId);
+          
+          // For sequential work, include the previous agent's output
+          const sequentialContext = {
+            ...context,
+            previousOutput: currentOutput,
+            collaborationPhase: `Step ${i+1}/${validAgents.length}`
+          };
+          
+          // Update collaborative task for sequential work
+          const sequentialTask = `
+            ${task}
+            
+            ${i > 0 ? `PREVIOUS AGENT OUTPUT (from ${getAgent(validAgents[i-1]).name}):\n${currentOutput}\n\nYour task is to build upon and improve this work.` : 'You are the first agent in this sequential collaboration.'}
+          `;
+          
+          const result = await sendTaskToAgent(agentId, sequentialTask, sequentialContext);
+          individualResults.push(result);
+          currentOutput = result.response;
+        }
+      } else {
+        // Parallel approach: all agents work independently
+        const individualResultPromises = validAgents.map(agentId => {
+          return sendTaskToAgent(agentId, task, {
+            ...context,
+            collaborationPhase: "Parallel work"
+          }).catch(error => {
             console.error(`Error with agent ${agentId}:`, error);
             // Return a placeholder result for failed agent
             const agent = getAgent(agentId) || { id: agentId, name: "Unknown Agent", type: "unknown" };
@@ -819,10 +900,12 @@
               response: `Error: ${error.message || "Unknown error"}`
             };
           });
-      });
+        });
+        
+        individualResults = await Promise.all(individualResultPromises);
+      }
       
-      const individualResults = await Promise.all(individualResultPromises);
-      
+      // Record individual contributions
       for (const result of individualResults) {
         collaborationResults.push({
           phase: "individual",
@@ -847,15 +930,31 @@
         };
       }
       
-      // Step 2: Get a synthesizer (use first agent or create a new one)
-      let synthesizerAgent = validAgents[0];
+      // Step 2: Synthesize the results based on the determined strategy
+      // Try to use a writer agent for synthesis if available
+      let synthesizerAgent = null;
+      
+      // Look for a writer among active agents
+      const writers = activeAgents.filter(agent => agent.type === 'writer');
+      if (writers.length > 0) {
+        synthesizerAgent = writers[0].id;
+      } else {
+        // Otherwise use the first agent
+        synthesizerAgent = validAgents[0];
+      }
       
       // Step 3: Synthesize the results
       const allResponses = individualResults
-        .map(r => `${r.name} (${r.type}): ${r.response}`)
+        .map(r => `${r.name} (${r.type}${getAgent(r.agentId)?.specialization ? ': ' + getAgent(r.agentId).specialization : ''}): ${r.response}`)
         .join("\n\n---\n\n");
       
+      // Use any custom synthesis strategy provided by coordinator
+      const synthesisStrategy = collaborationApproach?.synthesis_strategy || 
+        "Create a unified response that leverages the strengths of each agent";
+      
       const synthesisPrompt = `
+        SYNTHESIS TASK
+        
         You are coordinating a team of specialized agents who have each analyzed this task:
         "${task}"
         
@@ -864,24 +963,27 @@
         AGENT RESPONSES:
         ${allResponses}
         
+        YOUR SYNTHESIS STRATEGY:
+        ${synthesisStrategy}
+        
         Your job is to synthesize these perspectives into a cohesive final response that:
         1. Highlights areas of agreement
         2. Notes interesting differences in perspective
         3. Creates a unified response that leverages the strengths of each agent
         
-        Provide your synthesis in a clear, structured format.
+        Provide your synthesis in a clear, structured format suitable for the final response.
       `;
       
       try {
-        const synthesisResponse = await window.DocumentReviewer.APIService.callLLM(synthesisPrompt);
+        const synthesisResponse = await sendTaskToAgent(synthesizerAgent, synthesisPrompt, context);
         
         collaborationResults.push({
           phase: "synthesis",
           agentId: synthesizerAgent,
-          content: synthesisResponse
+          content: synthesisResponse.response
         });
         
-        finalSynthesis.content = synthesisResponse;
+        finalSynthesis.content = synthesisResponse.response;
         finalSynthesis.contributors = individualResults.map(r => ({ id: r.agentId, name: r.name, type: r.type }));
       } catch (synthesisError) {
         console.error("Error during synthesis:", synthesisError);

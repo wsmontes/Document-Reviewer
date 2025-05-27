@@ -73,55 +73,72 @@
     startTime = Date.now();
     
     // First, analyze query complexity to determine the optimal meta-depth
-    DocumentReviewer.UI.updateDebugInfo("Analyzing query complexity...");
+    DocumentReviewer.UI.updateDebugInfo("Analyzing query complexity and planning approach...");
     
     try {
       // Get document info
       const doc = DocumentReviewer.DocumentProcessor.getCurrentDocument();
       
-      // Enhanced prompt to encourage LLM autonomy and agent creation
+      // Completely enhanced prompt to give LLM full autonomy in process design and agent usage
       const complexityAnalysis = await DocumentReviewer.APIService.callLLM(`
-        You are an advanced reasoning system that can freely decide the optimal approach to solve problems.
+        You are an advanced reasoning system with complete freedom to determine the best approach to solve problems.
+        You can design your own process workflows, select specialized agents, and determine how to tackle this document analysis task.
         
         Analyze this query about the document to determine its complexity level and the optimal approach:
         
         "${query}"
         
-        Consider factors like:
-        1. Ambiguity and clarity
-        2. Technical complexity
-        3. Number of sub-questions or components
-        4. Domain knowledge requirements
-        5. Need for reasoning versus factual recall
+        THE DOCUMENT: "${doc.title}" with ${doc.pageCount} pages.
         
-        The query is about a document titled "${doc.title}" with ${doc.pageCount} pages.
+        AGENT CAPABILITIES:
+        You have access to specialized agents that can be used at ANY stage of your process:
         
-        You have access to specialized agents that can help with specific parts of this task:
         - Writer agents (specialized in creating clear, engaging content)
         - Reviewer agents (specialized in reviewing content for accuracy and completeness)
-        - Critic agents (specialized in finding weaknesses in arguments)
+        - Critic agents (specialized in finding weaknesses in arguments or logic)
         - Evaluator agents (specialized in objective quality assessment)
         - Researcher agents (specialized in gathering relevant information)
         - Questioner agents (specialized in asking probing questions)
         - Planner agents (specialized in planning complex analytical approaches)
-        - Agent Factory (specialized in creating new custom agents when needed)
         
-        IMPORTANT: You have full autonomy to determine the optimal complexity level, number of stages, and whether to use specialized agents.
+        Additionally, you have access to:
+        - Agent Factory (can create NEW specialized agent types tailored for specific purposes)
+        - Agent Coordinator (can manage teams of agents working together)
+        
+        KEY FEATURES YOU CAN UTILIZE:
+        1. You can use specialized agents at ANY step of your process
+        2. You can have agents collaborate in teams
+        3. You can create tailored agents for specific sub-tasks
+        4. You can implement self-critique and iterative refinement
+        5. You determine the optimal number of steps in your process
+        6. You can design a completely custom workflow that makes sense for this task
+        7. You can use critic agents to review and refine conclusions
+        
+        YOUR TASK:
+        Design an optimal document analysis and response workflow for this query, deciding:
+        1. The complexity level of the query
+        2. The optimal number of steps needed (no arbitrary limitations)
+        3. Which specialized agents to use at each stage
+        4. Whether to use iterative refinement with critic agents
+        5. Whether custom tailored agents should be created for this specific task
         
         Return your analysis in the following JSON format without any other text:
         {
           "complexity": "low|medium|high|very_high",
-          "optimal_stages": [number between 2 and 10],
+          "optimal_stages": [number of stages you determine is best],
           "reasoning": "[brief explanation of your assessment]",
-          "suggested_approach": "[brief description of recommended meta-prompting strategy]",
-          "use_specialized_agents": true/false,
+          "suggested_approach": "[description of recommended meta-prompting strategy]",
+          "use_specialized_agents": true,
           "recommended_agents": [
-            {"type": "agent type", "purpose": "what this agent will do"}
-          ]
+            {"type": "agent type", "purpose": "what this agent will do", "stage": "which stage of the process"}
+          ],
+          "need_custom_agents": true/false,
+          "custom_agent_descriptions": [
+            {"role": "descriptive name", "specialization": "specific focus area", "purpose": "why this custom agent is needed"}
+          ],
+          "use_critic_review": true/false,
+          "suggested_critique_approach": "[description of how critics should refine the response]"
         }
-        
-        IMPORTANT: Ensure your response is valid JSON. Do not include any unescaped special characters or line breaks within string values.
-        Do not include any text before or after the JSON.
       `);
       
       // Parse the JSON response
@@ -138,33 +155,33 @@
         DocumentReviewer.UI.updateDebugInfo(`Complexity analysis: ${complexityData.complexity}, ${complexityData.optimal_stages} stages`);
         DocumentReviewer.UI.updateComplexityDisplay(complexityData.complexity, complexityData.optimal_stages);
         
-        // Check if agents are recommended and auto mode is enabled
-        if (complexityData.use_specialized_agents && 
+        // Check if specialized agents are recommended
+        const useAgents = complexityData.use_specialized_agents !== false;
+        const needCustomAgents = complexityData.need_custom_agents === true;
+        const useCriticReview = complexityData.use_critic_review === true;
+        
+        if (useAgents && 
             window.DocumentReviewer.AgentManager && 
             window.DocumentReviewer.AgentManager.isAutoModeEnabled()) {
-          DocumentReviewer.UI.updateDebugInfo(`Agent usage recommended: ${complexityData.recommended_agents?.length || 'unspecified'} agents`);
+          DocumentReviewer.UI.updateDebugInfo(`Agent-based approach recommended with ${complexityData.recommended_agents?.length || 'unspecified'} agents`);
           
-          // Create a multi-agent approach with auto agent selection
-          return await executeMultiAgentApproach(query, complexityData, true);
-        } else if (complexityData.use_specialized_agents && 
-                  window.DocumentReviewer.AgentManager) {
-          // Use agent approach but with manual selection
-          return await executeMultiAgentApproach(query, complexityData, false);
+          if (needCustomAgents) {
+            DocumentReviewer.UI.updateDebugInfo(`Custom agents requested: ${complexityData.custom_agent_descriptions?.length || 0} custom agents`);
+          }
+          
+          if (useCriticReview) {
+            DocumentReviewer.UI.updateDebugInfo(`Critic review process will be used for response refinement`);
+          }
+          
+          // Create a multi-agent approach with auto agent selection and full LLM control
+          return await executeEnhancedAgentApproach(query, complexityData);
+        } else if (useAgents && window.DocumentReviewer.AgentManager) {
+          // Use agent approach with custom process but manual agent selection
+          return await executeCustomAgentProcess(query, complexityData);
         }
       } catch (jsonError) {
         console.error("Failed to parse complexity analysis:", jsonError);
-        DocumentReviewer.UI.updateDebugInfo("Failed to parse complexity analysis, using default approach");
-        
-        // Default values if parsing fails
-        complexityData = {
-          complexity: "medium",
-          optimal_stages: 3,
-          reasoning: "Using default approach due to analysis error",
-          suggested_approach: "Standard multi-stage approach with query analysis, meta-prompt, and response generation",
-          use_specialized_agents: false
-        };
-        
-        DocumentReviewer.UI.updateComplexityDisplay(complexityData.complexity, complexityData.optimal_stages);
+        DocumentReviewer.UI.updateDebugInfo("Failed to parse complexity analysis, using standard approach");
       }
       
       // Generate the optimal meta-process stages with unlimited flexibility
@@ -322,123 +339,186 @@
   }
 
   /**
-   * Enhanced multi-agent approach with option for automatic agent selection
+   * Execute an enhanced agent approach with full LLM control over the process
    */
-  async function executeMultiAgentApproach(query, complexityData, useAutoAgents = false) {
-    DocumentReviewer.UI.updateDebugInfo(`Executing ${useAutoAgents ? 'automatic' : 'manual'} multi-agent approach`);
+  async function executeEnhancedAgentApproach(query, complexityData) {
+    DocumentReviewer.UI.updateDebugInfo("Executing enhanced agent approach with LLM-designed workflow");
     
     try {
-      // Set up meta process stages
-      const metaProcessDefinition = [
-        { id: "agent-selection", title: "Agent Selection", description: "Selecting specialized agents for this query" },
-        { id: "agent-execution", title: "Agent Execution", description: "Executing specialized agent tasks" },
-        { id: "response-synthesis", title: "Response Synthesis", description: "Synthesizing agent outputs into a final response" }
-      ];
+      // Use the complexityData to build a custom process definition
+      const customStages = [];
+      let stageCount = complexityData.optimal_stages || 3;
       
-      DocumentReviewer.UI.setMetaProcessDefinition(metaProcessDefinition);
-      DocumentReviewer.UI.renderMetaProcessStages();
-      DocumentReviewer.UI.updateMetaStage(0, "Selecting agents...");
-      
-      let result;
-      
-      if (useAutoAgents) {
-        // Use the automatic agent selection and execution process
-        const taskDescription = `Analyze document "${DocumentReviewer.DocumentProcessor.getCurrentDocument().title}" to answer: ${query}`;
-        
-        DocumentReviewer.UI.updateDebugInfo("Using automated agent selection");
-        
-        // Update stage with auto selection info
-        DocumentReviewer.UI.updateMetaStage(0, "Automatically analyzing task and selecting optimal agents...", false);
-        
-        try {
-          // Run the automated process
-          result = await DocumentReviewer.AgentManager.runAutoAgentProcess(
-            taskDescription,
-            { query }
-          );
-          
-          // Mark selection stage as complete
-          const agentCount = result.contributors ? result.contributors.length : 'unknown number of';
-          DocumentReviewer.UI.updateMetaStage(0, `Selected ${agentCount} specialized agents automatically`, true);
-        } catch (agentError) {
-          // Handle agent error and provide fallback response
-          console.error("Auto agent process failed:", agentError);
-          DocumentReviewer.UI.updateMetaStage(0, `Agent selection failed: ${agentError.message}`, true);
-          
-          // Create fallback response
-          const fallbackResponse = await createFallbackResponse(query);
-          
-          // Mark stages as completed
-          DocumentReviewer.UI.updateMetaStage(1, "Using direct query approach due to agent error", true);
-          DocumentReviewer.UI.updateMetaStage(2, "Generated fallback response", true);
-          
-          // Display the fallback response
-          DocumentReviewer.UI.displayResponse(fallbackResponse);
-          DocumentReviewer.UI.addAIMessage(fallbackResponse);
-          
-          // Return success to avoid further error handling
-          return true;
-        }
+      // Generate stage definitions if not provided
+      if (complexityData.process_stages) {
+        // Use directly provided stages
+        customStages.push(...complexityData.process_stages);
       } else {
-        // Create a planner agent first
-        const planner = DocumentReviewer.AgentManager.createAgent('planner', {
-          name: "Process Coordinator",
-          specialization: `Planning for ${complexityData.complexity} complexity ${query.length > 20 ? query.substring(0, 20) + '...' : query}`
-        });
-        
-        // Ask the planner to design the agent team based on the initial recommendations
-        const planningRequest = `
-          Based on this query: "${query}"
-          
-          And the initial complexity analysis:
-          - Complexity: ${complexityData.complexity}
-          - Optimal stages: ${complexityData.optimal_stages}
-          - Reasoning: ${complexityData.reasoning}
-          
-          Design an optimal team of agents to handle this task.
-          
-          ${complexityData.recommended_agents && complexityData.recommended_agents.length > 0 ? 
-            `Initial agent recommendations:
-            ${complexityData.recommended_agents.map(agent => 
-              `- ${agent.type} for ${agent.purpose}`
-            ).join('\n')}` : 
-            ''}
-          
-          For each agent, specify:
-          1. The exact type of agent
-          2. A specialized name for the agent
-          3. The specific tasks/responsibilities for this agent
-          4. How the agent will interact with other agents
-          
-          Be strategic in your planning - don't just create agents for the sake of it, but ensure each agent has a distinct, valuable role.
-        `;
-        
-        // Send the planning request to the planner agent
-        const planningResult = await DocumentReviewer.AgentManager.sendTaskToAgent(
-          planner.id, 
-          planningRequest, 
-          { query }
+        // Generate stages based on recommended approach
+        // Always include these key stages at minimum
+        customStages.push(
+          { id: "planning", title: "Process Planning", description: "Planning the analysis approach and agent assignments" },
+          { id: "execution", title: "Analysis Execution", description: "Analyzing document and executing the planned approach" }
         );
         
-        // Update the planning stage with the result
-        DocumentReviewer.UI.updateMetaStage(0, `${planningResult.response}`, true);
+        // Add critique phase if requested
+        if (complexityData.use_critic_review) {
+          customStages.push({ 
+            id: "critique", 
+            title: "Critical Review", 
+            description: "Critically reviewing initial findings to identify improvements" 
+          });
+        }
         
-        // Continue with existing agent creation from planner results
-        // ... existing code for extracting agent data and creating agents ...
+        // Add refinement phase if critic review is enabled
+        if (complexityData.use_critic_review) {
+          customStages.push({ 
+            id: "refinement", 
+            title: "Response Refinement", 
+            description: "Refining the response based on critical feedback" 
+          });
+        }
+        
+        // Always add a synthesis/final response stage
+        customStages.push({ 
+          id: "synthesis", 
+          title: "Response Synthesis", 
+          description: "Creating the final comprehensive response" 
+        });
       }
       
-      // Mark execution stage as completed
-      DocumentReviewer.UI.updateMetaStage(1, "Agent tasks completed", true);
+      // Update UI with custom process stages
+      DocumentReviewer.UI.setMetaProcessDefinition(customStages);
+      DocumentReviewer.UI.renderMetaProcessStages();
       
-      // Update synthesis stage with result
-      const synthesisResult = result && result.synthesis ? result.synthesis : "Agents completed their analysis but no synthesis was generated.";
-      DocumentReviewer.UI.updateMetaStage(2, synthesisResult, true);
+      // Create stage mapping for agent assignments
+      const stageAgentMap = new Map();
+      let customAgentsNeeded = [];
+      
+      // Map recommended agents to stages
+      if (complexityData.recommended_agents && Array.isArray(complexityData.recommended_agents)) {
+        complexityData.recommended_agents.forEach(agentRec => {
+          const stage = agentRec.stage || "execution"; // Default to execution stage if not specified
+          if (!stageAgentMap.has(stage)) {
+            stageAgentMap.set(stage, []);
+          }
+          stageAgentMap.get(stage).push({
+            type: agentRec.type,
+            purpose: agentRec.purpose
+          });
+        });
+      }
+      
+      // Collect custom agent needs
+      if (complexityData.need_custom_agents && complexityData.custom_agent_descriptions) {
+        customAgentsNeeded = complexityData.custom_agent_descriptions;
+      }
+      
+      // First stage: Setup and planning
+      DocumentReviewer.UI.updateMetaStage(0, "Setting up agent workflow...");
+      
+      // Create any custom agents needed
+      const customAgents = [];
+      if (customAgentsNeeded.length > 0) {
+        DocumentReviewer.UI.updateDebugInfo("Creating custom agents for this task...");
+        
+        try {
+          // Get the factory agent
+          const factoryAgent = await ensureAgentExists('factory');
+          
+          // Create each custom agent
+          for (const customAgentSpec of customAgentsNeeded) {
+            DocumentReviewer.UI.updateMetaStage(0, `Creating custom ${customAgentSpec.role} agent...`);
+            
+            const newAgentResult = await DocumentReviewer.AgentManager.createCustomAgentFromFactory(
+              factoryAgent.id,
+              `Create a specialized agent with role: ${customAgentSpec.role}
+               Specialization: ${customAgentSpec.specialization}
+               Purpose: ${customAgentSpec.purpose}
+               This agent will be used for a document analysis task: "${query}"`,
+              { query, additionalContext: `This agent should be highly specialized for: ${customAgentSpec.specialization}` }
+            );
+            
+            if (newAgentResult && newAgentResult.newAgent) {
+              customAgents.push(newAgentResult.newAgent);
+              DocumentReviewer.UI.updateDebugInfo(`Created custom agent: ${newAgentResult.newAgent.name}`);
+            }
+          }
+        } catch (error) {
+          console.error("Error creating custom agents:", error);
+          DocumentReviewer.UI.updateDebugInfo(`Error creating custom agents: ${error.message}`);
+        }
+      }
+      
+      // Mark planning stage as complete
+      DocumentReviewer.UI.updateMetaStage(0, "Agent workflow planned", true);
+      
+      // Execute each subsequent stage with appropriate agents
+      let finalResponse = "";
+      let lastStageOutput = "";
+      let critiquesGenerated = [];
+      
+      for (let i = 1; i < customStages.length; i++) {
+        const stage = customStages[i];
+        DocumentReviewer.UI.updateMetaStage(i, `Executing ${stage.title}...`);
+        
+        if (stage.id === "critique" && complexityData.use_critic_review) {
+          // Special handling for critique stage
+          const critiquesResult = await executeMultiAgentCritique(lastStageOutput, query);
+          critiquesGenerated = critiquesResult.critiques;
+          DocumentReviewer.UI.updateMetaStage(i, critiquesResult.summary, true);
+        } 
+        else if (stage.id === "refinement" && critiquesGenerated.length > 0) {
+          // Special handling for refinement stage based on critiques
+          const refinementResult = await executeResponseRefinement(lastStageOutput, critiquesGenerated, query);
+          lastStageOutput = refinementResult.refinedResponse;
+          finalResponse = refinementResult.refinedResponse;
+          DocumentReviewer.UI.updateMetaStage(i, "Response refined based on critiques", true);
+        }
+        else {
+          // Standard stage execution with assigned agents
+          const stageAgents = stageAgentMap.get(stage.id) || [];
+          const defaultAgentType = getDefaultAgentTypeForStage(stage.id);
+          
+          // If no agents assigned to this stage, ensure we have at least one appropriate agent
+          if (stageAgents.length === 0 && defaultAgentType) {
+            stageAgents.push({ type: defaultAgentType, purpose: `Handle ${stage.title} stage` });
+          }
+          
+          // Add custom agents appropriate for this stage
+          customAgents.forEach(agent => {
+            if (agent.specialization && isAgentSuitableForStage(agent, stage.id)) {
+              stageAgents.push({ 
+                id: agent.id, // Use specific agent ID for custom agents
+                type: 'custom',
+                purpose: `Provide specialized ${agent.specialization} analysis`
+              });
+            }
+          });
+          
+          // Execute the stage with appropriate agents
+          const stageResult = await executeStageWithAgents(
+            stageAgents, 
+            stage, 
+            query,
+            lastStageOutput, // Pass previous stage output as context
+            i === customStages.length - 1 // Is this the final stage?
+          );
+          
+          lastStageOutput = stageResult.response;
+          if (i === customStages.length - 1) {
+            finalResponse = stageResult.response;
+          }
+          
+          DocumentReviewer.UI.updateMetaStage(i, stageResult.summary, true);
+        }
+      }
       
       // Display the final response in the response area
-      DocumentReviewer.UI.displayResponse(synthesisResult);
+      DocumentReviewer.UI.displayResponse(finalResponse);
       
       // Add the response as an AI message
-      DocumentReviewer.UI.addAIMessage(synthesisResult);
+      DocumentReviewer.UI.addAIMessage(finalResponse);
       
       // Complete meta process
       const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -446,51 +526,280 @@
       
       // Update UI stats
       const apiState = DocumentReviewer.APIService.getState();
-      DocumentReviewer.UI.updateStats(apiState.promptCount, apiState.tokenUsage);
+      DocumentReviewer.UI.updateStats(apiState.promptCount, apiState.tokenUsage, metaQuality);
       
       return true;
     } catch (error) {
-      console.error("Error in multi-agent approach:", error);
-      DocumentReviewer.UI.updateDebugInfo(`Multi-agent approach error: ${error.message}`);
+      console.error("Error in enhanced agent approach:", error);
+      DocumentReviewer.UI.updateDebugInfo(`Enhanced agent approach error: ${error.message}`);
       
-      // Return false to signal that we should fall back to standard approach
-      return false;
+      // Try fallback response
+      return await createFallbackResponse(query);
     }
   }
-  
+
   /**
-   * Create a fallback response when the agent approach fails
+   * Execute a stage with the assigned agents
    */
-  async function createFallbackResponse(query) {
-    DocumentReviewer.UI.updateDebugInfo("Creating fallback response without agents");
+  async function executeStageWithAgents(stageAgents, stage, query, previousOutput, isFinalStage) {
+    DocumentReviewer.UI.updateDebugInfo(`Executing ${stage.title} with ${stageAgents.length} agents`);
     
     try {
-      const doc = DocumentReviewer.DocumentProcessor.getCurrentDocument();
+      const agentIds = [];
       
-      const prompt = `
-        I need you to analyze this document and answer a question about it directly.
+      // Convert agent specs to actual agent IDs
+      for (const agentSpec of stageAgents) {
+        if (agentSpec.id) {
+          // If ID is already provided (for custom agents)
+          agentIds.push(agentSpec.id);
+        } else {
+          // Otherwise find or create an agent of the specified type
+          try {
+            const agent = await ensureAgentExists(agentSpec.type, {
+              specialization: `${stage.title} - ${agentSpec.purpose}`
+            });
+            agentIds.push(agent.id);
+          } catch (error) {
+            console.error(`Error ensuring agent exists for ${agentSpec.type}:`, error);
+            DocumentReviewer.UI.updateDebugInfo(`Could not create agent of type ${agentSpec.type}`);
+          }
+        }
+      }
+      
+      // Skip if no valid agents were found/created
+      if (agentIds.length === 0) {
+        return { 
+          response: previousOutput || "No agents available to process this stage.", 
+          summary: "Stage skipped - no valid agents"
+        };
+      }
+      
+      // Prepare the task for agents
+      const taskDescription = `
+        STAGE: ${stage.title}
+        DESCRIPTION: ${stage.description}
         
-        DOCUMENT TITLE: "${doc.title}"
+        QUERY: "${query}"
         
-        DOCUMENT CONTENT:
-        ${doc.text.length > 6000 ? doc.text.substring(0, 6000) + "... [truncated for length]" : doc.text}
+        ${previousOutput ? `PREVIOUS STAGE OUTPUT:\n${previousOutput}\n` : ''}
         
-        USER QUERY: "${query}"
-        
-        Please provide a comprehensive, well-structured response to the query.
-        Begin by addressing the core question, then provide relevant details from the document.
-        Include specific information from the document to support your points.
+        ${isFinalStage ? 'This is the final stage. Generate a comprehensive, well-formatted response to the query.' : ''}
       `;
       
-      const response = await DocumentReviewer.APIService.callLLM(prompt);
-      return response;
+      // Run collaboration with the selected agents
+      const collaborationResult = await DocumentReviewer.AgentManager.runAgentCollaboration(
+        agentIds, 
+        taskDescription, 
+        { query, previousOutput, isFinalStage }
+      );
+      
+      return {
+        response: collaborationResult.synthesis,
+        summary: `${stageAgents.length} agents collaboratively executed this stage`,
+        agents: collaborationResult.contributors
+      };
     } catch (error) {
-      console.error("Error creating fallback response:", error);
-      return "I apologize, but I encountered an error analyzing the document. Please try again or rephrase your query.";
+      console.error(`Error executing stage ${stage.title}:`, error);
+      DocumentReviewer.UI.updateDebugInfo(`Stage execution error: ${error.message}`);
+      
+      return { 
+        response: previousOutput || `Error: Could not complete ${stage.title} stage.`, 
+        summary: `Error: ${error.message}`
+      };
     }
   }
-  
-  // Execute the meta stages
+
+  /**
+   * Execute multi-agent critique of an initial response
+   */
+  async function executeMultiAgentCritique(initialResponse, query) {
+    DocumentReviewer.UI.updateDebugInfo("Executing multi-agent critique process");
+    
+    try {
+      // Ensure we have critic agents
+      const critic1 = await ensureAgentExists('critic', {
+        specialization: "Logical consistency and evidence analysis"
+      });
+      
+      const critic2 = await ensureAgentExists('critic', {
+        specialization: "Completeness and addressing the query"
+      });
+      
+      const questioner = await ensureAgentExists('questioner', {
+        specialization: "Identifying unanswered aspects"
+      });
+      
+      const taskDescription = `
+        CRITIQUE TASK
+        
+        Analyze this response to the query and provide a detailed critique:
+        
+        QUERY: "${query}"
+        
+        RESPONSE TO CRITIQUE:
+        ${initialResponse}
+        
+        Provide specific, actionable criticism that can be used to improve the response.
+        Focus on logical consistency, evidence, completeness, and how well it addresses the query.
+      `;
+      
+      // Run collaboration with critics
+      const critiquesResult = await DocumentReviewer.AgentManager.runAgentCollaboration(
+        [critic1.id, critic2.id, questioner.id],
+        taskDescription,
+        { query }
+      );
+      
+      return {
+        critiques: [critiquesResult.synthesis],
+        summary: "Response critically analyzed for improvements",
+      };
+    } catch (error) {
+      console.error("Error in multi-agent critique:", error);
+      DocumentReviewer.UI.updateDebugInfo(`Critique process error: ${error.message}`);
+      
+      return { 
+        critiques: [],
+        summary: `Critique process encountered an error: ${error.message}`
+      };
+    }
+  }
+
+  /**
+   * Refine response based on critiques
+   */
+  async function executeResponseRefinement(initialResponse, critiques, query) {
+    DocumentReviewer.UI.updateDebugInfo("Executing response refinement based on critiques");
+    
+    try {
+      // Get a writer agent for refinement
+      const writer = await ensureAgentExists('writer', {
+        specialization: "Response refinement based on critique"
+      });
+      
+      const taskDescription = `
+        REFINEMENT TASK
+        
+        Revise and improve this response based on the provided critiques:
+        
+        ORIGINAL QUERY: "${query}"
+        
+        ORIGINAL RESPONSE:
+        ${initialResponse}
+        
+        CRITIQUES TO ADDRESS:
+        ${critiques.join('\n\n')}
+        
+        Create an improved version that addresses all the issues identified in the critiques.
+        Maintain any strengths of the original response while fixing the weaknesses.
+        Provide a comprehensive, well-structured final response.
+      `;
+      
+      // Send refinement task to writer agent
+      const refinementResult = await DocumentReviewer.AgentManager.sendTaskToAgent(
+        writer.id,
+        taskDescription,
+        { query }
+      );
+      
+      return {
+        refinedResponse: refinementResult.response,
+        summary: "Response refined based on critical feedback"
+      };
+    } catch (error) {
+      console.error("Error in response refinement:", error);
+      DocumentReviewer.UI.updateDebugInfo(`Refinement process error: ${error.message}`);
+      
+      // Return original response if refinement fails
+      return { 
+        refinedResponse: initialResponse,
+        summary: `Refinement process encountered an error: ${error.message}`
+      };
+    }
+  }
+
+  /**
+   * Ensure that an agent of the specified type exists, creating it if needed
+   */
+  async function ensureAgentExists(agentType, customizations = {}) {
+    try {
+      // Find an existing agent of this type
+      const existingAgents = DocumentReviewer.AgentManager.getActiveAgents().filter(
+        a => a.type === agentType
+      );
+      
+      // If we have specialization requirements, check for that
+      if (customizations.specialization && existingAgents.length > 0) {
+        const specializedAgent = existingAgents.find(a => 
+          a.specialization && 
+          a.specialization.includes(customizations.specialization)
+        );
+        
+        if (specializedAgent) {
+          return specializedAgent;
+        }
+      }
+      
+      // If any agent of this type exists and we don't need specialization, use the first one
+      if (existingAgents.length > 0 && !customizations.specialization) {
+        return existingAgents[0];
+      }
+      
+      // Otherwise create a new agent
+      return DocumentReviewer.AgentManager.createAgent(agentType, customizations);
+      
+    } catch (error) {
+      console.error(`Error ensuring agent exists for type ${agentType}:`, error);
+      throw new Error(`Failed to create or find agent of type ${agentType}`);
+    }
+  }
+
+  /**
+   * Get default agent type for a particular stage
+   */
+  function getDefaultAgentTypeForStage(stageId) {
+    switch (stageId) {
+      case 'planning': return 'planner';
+      case 'research': return 'researcher';
+      case 'analysis': return 'researcher';
+      case 'execution': return 'researcher';
+      case 'critique': return 'critic';
+      case 'refinement': return 'writer';
+      case 'synthesis': return 'writer';
+      default: return 'researcher'; // Default fallback
+    }
+  }
+
+  /**
+   * Check if an agent is suitable for a particular stage based on its specialization
+   */
+  function isAgentSuitableForStage(agent, stageId) {
+    if (!agent.specialization) return false;
+    
+    const spec = agent.specialization.toLowerCase();
+    
+    switch (stageId) {
+      case 'planning': 
+        return spec.includes('plan') || spec.includes('strategy') || spec.includes('approach');
+      case 'research': 
+        return spec.includes('research') || spec.includes('information') || spec.includes('gather');
+      case 'analysis': 
+        return spec.includes('analy') || spec.includes('evaluate') || spec.includes('assess');
+      case 'execution': 
+        return true; // Custom agents can generally help with execution
+      case 'critique': 
+        return spec.includes('critic') || spec.includes('review') || spec.includes('evaluat');
+      case 'refinement': 
+        return spec.includes('refin') || spec.includes('improv') || spec.includes('enhanc');
+      case 'synthesis': 
+        return spec.includes('synth') || spec.includes('summar') || spec.includes('writ');
+      default: return true; // By default allow custom agents in any stage
+    }
+  }
+
+  /**
+   * Execute the meta stages
+   */
   async function executeMetaStages(query, stages) {
     DocumentReviewer.UI.updateDebugInfo("Executing meta stages...");
     let finalResponse = "";
@@ -576,11 +885,6 @@
           finalResponse = stageResponse;
           DocumentReviewer.UI.displayResponse(finalResponse);
           DocumentReviewer.UI.addAIMessage(finalResponse);
-          
-          // Generate a quality assessment for this response
-          const qualityAssessment = await estimateResponseQuality(query, finalResponse);
-          quality = qualityAssessment.quality || 7;
-          confidence = qualityAssessment.confidence || 0.7;
         }
       } catch (error) {
         console.error(`Error in stage ${i+1}:`, error);
@@ -597,46 +901,101 @@
     };
   }
 
-  // Estimate the quality of a response
-  async function estimateResponseQuality(query, response) {
-    try {
-      const qualityPrompt = `
-        You are evaluating the quality of a response to a query.
+  /**
+   * Add self-critique to UI
+   */
+  async function addSelfCritiqueToUI(critique) {
+    // Safety check in case critique is empty or invalid
+    if (!critique || typeof critique !== 'object') {
+      console.error("Cannot add invalid critique to UI", critique);
+      return;
+    }
+    
+    // Find the evaluate stage if it exists
+    const evaluateStage = document.querySelector('#stage-evaluate') || 
+                        document.querySelector('.meta-process-stage:nth-last-child(2)');
+    
+    if (evaluateStage) {
+      const contentEl = evaluateStage.querySelector('.stage-content');
+      if (contentEl) {
+        let strengthsList = '<ul><li>No strengths identified</li></ul>';
+        let weaknessesList = '<ul><li>No weaknesses identified</li></ul>';
+        let suggestionsList = '<ul><li>No specific suggestions</li></ul>';
         
-        QUERY: "${query}"
-        
-        RESPONSE:
-        ${response}
-        
-        Evaluate this response on a scale of 1-10 and provide a confidence score.
-        Return only a JSON object in this format:
-        {
-          "quality": [number between 1-10],
-          "confidence": [number between 0-1]
+        // Create lists if data is available
+        if (critique.strengths && critique.strengths.length > 0) {
+          strengthsList = '<ul>' + critique.strengths.map(s => `<li>${s}</li>`).join('') + '</ul>';
         }
-      `;
-      
-      const qualityResponse = await DocumentReviewer.APIService.callLLM(qualityPrompt);
-      
-      try {
-        // Extract JSON from potential text response
-        const jsonMatch = qualityResponse.match(/\{[\s\S]*\}/);
-        const jsonStr = jsonMatch ? jsonMatch[0] : qualityResponse;
         
-        // Sanitize the JSON string before parsing
-        const sanitizedJsonStr = DocumentReviewer.Helpers.sanitizeJsonString(jsonStr);
-        return JSON.parse(sanitizedJsonStr);
-      } catch (error) {
-        console.error("Error parsing quality assessment:", error);
-        return { quality: 7, confidence: 0.7 };
+        if (critique.weaknesses && critique.weaknesses.length > 0) {
+          weaknessesList = '<ul>' + critique.weaknesses.map(w => `<li>${w}</li>`).join('') + '</ul>';
+        }
+        
+        if (critique.improvement_suggestions && critique.improvement_suggestions.length > 0) {
+          suggestionsList = '<ul>' + critique.improvement_suggestions.map(i => `<li>${i}</li>`).join('') + '</ul>';
+        }
+        
+        const critiqueHTML = `
+          <div class="self-critique">
+            <strong>Rating: ${critique.rating || 'N/A'}/10</strong> 
+            (Confidence: ${Math.round((critique.confidence_score || 0.5) * 100)}%)<br>
+            <strong>Strengths:</strong> ${strengthsList}<br>
+            <strong>Weaknesses:</strong> ${weaknessesList}<br>
+            <strong>Suggestions:</strong> ${suggestionsList}<br>
+            <strong>Overall:</strong> ${critique.overall_assessment || 'No overall assessment provided'}
+          </div>
+        `;
+        
+        contentEl.innerHTML = critiqueHTML;
+        evaluateStage.classList.add('completed-stage');
+      } else {
+        console.warn("Could not find content element in evaluate stage");
       }
-    } catch (error) {
-      console.error("Error estimating response quality:", error);
-      return { quality: 7, confidence: 0.7 };
+    } else {
+      // If we can't find the evaluate stage, try to create one
+      try {
+        const metaProcess = document.getElementById('meta-process-stages');
+        if (metaProcess) {
+          // Create a new evaluate stage
+          const newStage = document.createElement('div');
+          newStage.id = 'stage-evaluate';
+          newStage.className = 'meta-process-stage';
+          
+          newStage.innerHTML = `
+            <h3>Response Evaluation</h3>
+            <div class="stage-content">
+              <div class="self-critique">
+                <strong>Rating: ${critique.rating || 'N/A'}/10</strong> 
+                (Confidence: ${Math.round((critique.confidence_score || 0.5) * 100)}%)<br>
+                <strong>Strengths:</strong> <ul>${critique.strengths ? critique.strengths.map(s => `<li>${s}</li>`).join('') : '<li>No strengths identified</li>'}</ul><br>
+                <strong>Weaknesses:</strong> <ul>${critique.weaknesses ? critique.weaknesses.map(w => `<li>${w}</li>`).join('') : '<li>No weaknesses identified</li>'}</ul><br>
+                <strong>Suggestions:</strong> <ul>${critique.improvement_suggestions ? critique.improvement_suggestions.map(i => `<li>${i}</li>`).join('') : '<li>No specific suggestions</li>'}</ul><br>
+                <strong>Overall:</strong> ${critique.overall_assessment || 'No overall assessment provided'}
+              </div>
+            </div>
+          `;
+          
+          metaProcess.appendChild(newStage);
+          newStage.classList.add('completed-stage');
+          
+          DocumentReviewer.UI.updateDebugInfo("Created new evaluation stage for self-critique");
+        } else {
+          console.warn("Could not find meta-process container to add evaluation stage");
+        }
+      } catch (e) {
+        console.error("Error creating evaluation stage:", e);
+      }
+    }
+    
+    // Update confidence display if that function exists
+    if (typeof DocumentReviewer.UI.updateConfidenceDisplay === 'function') {
+      DocumentReviewer.UI.updateConfidenceDisplay(critique.confidence_score || 0.7);
     }
   }
 
-  // Generate self-critique
+  /**
+   * Generate self-critique for a response
+   */
   async function generateSelfCritique(query, response, metaPrompt) {
     DocumentReviewer.UI.updateDebugInfo("Generating self-critique...");
     
@@ -685,8 +1044,12 @@
         const jsonMatch = critiqueTxt.match(/\{[\s\S]*\}/);
         const jsonStr = jsonMatch ? jsonMatch[0] : critiqueTxt;
         
+        // Log the raw JSON for debugging
+        console.log("Raw critique JSON:", jsonStr);
+        
         // Sanitize the JSON string before parsing
         const sanitizedJsonStr = DocumentReviewer.Helpers.sanitizeJsonString(jsonStr);
+        console.log("Sanitized critique JSON:", sanitizedJsonStr);
         
         const critique = JSON.parse(sanitizedJsonStr);
         
@@ -696,9 +1059,10 @@
         return critique;
       } catch (jsonError) {
         console.error("Failed to parse critique:", jsonError);
+        console.log("Problematic JSON string:", critiqueTxt);
         
         // Create a default critique object as fallback
-        const fallbackCritique = {
+        return {
           rating: 6,
           confidence_score: 0.5,
           strengths: ["Addressed the query"],
@@ -706,14 +1070,11 @@
           improvement_suggestions: ["Consider alternative perspectives", "Provide more structured response"],
           overall_assessment: "Response is adequate but could be improved. Note: This is a fallback assessment due to JSON parsing error."
         };
-        
-        DocumentReviewer.UI.updateConfidenceDisplay(0.5);
-        return fallbackCritique;
       }
     } catch (error) {
       console.error("Error generating self-critique:", error);
       // Return a fallback critique
-      const errorCritique = {
+      return {
         rating: 5,
         confidence_score: 0.5,
         strengths: ["Unknown"],
@@ -721,228 +1082,12 @@
         improvement_suggestions: ["Try a different approach"],
         overall_assessment: "Could not properly evaluate due to an error"
       };
-      
-      DocumentReviewer.UI.updateConfidenceDisplay(0.5);
-      return errorCritique;
     }
   }
 
-  // Add self-critique to UI
-  async function addSelfCritiqueToUI(critique) {
-    // Safety check in case critique is empty or invalid
-    if (!critique || typeof critique !== 'object') {
-      console.error("Cannot add invalid critique to UI", critique);
-      return;
-    }
-    
-    // Find the evaluate stage if it exists
-    const evaluateStage = document.querySelector('#stage-evaluate') || 
-                        document.querySelector('.meta-process-stage:nth-last-child(2)');
-    
-    if (evaluateStage) {
-      const contentEl = evaluateStage.querySelector('.stage-content');
-      if (contentEl) {
-        let strengthsList = '<ul><li>No strengths identified</li></ul>';
-        let weaknessesList = '<ul><li>No weaknesses identified</li></ul>';
-        let suggestionsList = '<ul><li>No specific suggestions</li></ul>';
-        
-        // Create lists if data is available
-        if (critique.strengths && critique.strengths.length > 0) {
-          strengthsList = '<ul>' + critique.strengths.map(s => `<li>${s}</li>`).join('') + '</ul>';
-        }
-        
-        if (critique.weaknesses && critique.weaknesses.length > 0) {
-          weaknessesList = '<ul>' + critique.weaknesses.map(w => `<li>${w}</li>`).join('') + '</ul>';
-        }
-        
-        if (critique.improvement_suggestions && critique.improvement_suggestions.length > 0) {
-          suggestionsList = '<ul>' + critique.improvement_suggestions.map(i => `<li>${i}</li>`).join('') + '</ul>';
-        }
-        
-        const critiqueHTML = `
-          <div class="self-critique">
-            <strong>Rating: ${critique.rating || 'N/A'}/10</strong> 
-            (Confidence: ${Math.round((critique.confidence_score || 0.5) * 100)}%)<br>
-            <strong>Strengths:</strong> ${strengthsList}<br>
-            <strong>Weaknesses:</strong> ${weaknessesList}<br>
-            <strong>Suggestions:</strong> ${suggestionsList}<br>
-            <strong>Overall:</strong> ${critique.overall_assessment || 'No overall assessment provided'}
-          </div>
-        `;
-        
-        contentEl.innerHTML = critiqueHTML;
-        evaluateStage.classList.add('completed-stage');
-      }
-    } else {
-      console.warn("Could not find evaluate stage to add critique");
-    }
-  }
-
-  // Generate alternative approaches
-  async function generateAlternativeApproaches(query, critique, currentResponse) {
-    DocumentReviewer.UI.updateDebugInfo("Generating alternative approaches based on critique");
-    
-    try {
-      const altApproachesPrompt = `
-        Based on this critique of a response to a query about a document, suggest 2 alternative prompting approaches:
-        
-        ORIGINAL QUERY: "${query}"
-        
-        CRITIQUE:
-        ${JSON.stringify(critique)}
-        
-        CURRENT RESPONSE:
-        ${currentResponse.substring(0, 500)}... [truncated]
-        
-        For each alternative approach:
-        1. Provide a title for the approach
-        2. Explain the rationale
-        3. Provide a complete prompt that would be sent to the LLM
-        
-        Return your suggestions in this JSON format:
-        {
-          "approaches": [
-            {
-              "title": "Approach title",
-              "rationale": "Why this might work better",
-              "prompt": "The complete prompt text"
-            },
-            {
-              "title": "Another approach title",
-              "rationale": "Why this might work better",
-              "prompt": "The complete prompt text"
-            }
-          ]
-        }
-      `;
-      
-      const altApproachesResponse = await DocumentReviewer.APIService.callLLM(altApproachesPrompt);
-      
-      try {
-        // Extract JSON
-        const jsonMatch = altApproachesResponse.match(/\{[\s\S]*\}/);
-        const jsonStr = jsonMatch ? jsonMatch[0] : altApproachesResponse;
-        const parsedApproaches = JSON.parse(DocumentReviewer.Helpers.sanitizeJsonString(jsonStr));
-        
-        if (parsedApproaches.approaches && Array.isArray(parsedApproaches.approaches)) {
-          alternativeApproaches = parsedApproaches.approaches;
-          DocumentReviewer.UI.updateDebugInfo(`Generated ${alternativeApproaches.length} alternative approaches`);
-        } else {
-          throw new Error("Invalid format for alternative approaches");
-        }
-      } catch (jsonError) {
-        console.error("Error parsing alternative approaches:", jsonError);
-        
-        // Get document info
-        const doc = DocumentReviewer.DocumentProcessor.getCurrentDocument();
-        
-        // Create fallback approaches
-        alternativeApproaches = [
-          {
-            title: "More focused approach",
-            rationale: "Focus more specifically on the query",
-            prompt: `
-              Provide a highly focused response to this query about the document:
-              QUERY: "${query}"
-              
-              DOCUMENT CONTENT:
-              ${doc.text.length > 4000 ? doc.text.substring(0, 4000) + "... [truncated]" : doc.text}
-              
-              Be extremely specific and focused on directly answering the question.
-            `
-          },
-          {
-            title: "More comprehensive approach",
-            rationale: "Provide more context and detail",
-            prompt: `
-              Provide a comprehensive and detailed response to this query:
-              QUERY: "${query}"
-              
-              DOCUMENT CONTENT:
-              ${doc.text.length > 4000 ? doc.text.substring(0, 4000) + "... [truncated]" : doc.text}
-              
-              Include all relevant details from the document, and structure your response clearly.
-            `
-          }
-        ];
-        
-        DocumentReviewer.UI.updateDebugInfo("Created fallback alternative approaches due to parsing error");
-      }
-      
-      return alternativeApproaches;
-    } catch (error) {
-      console.error("Error generating alternative approaches:", error);
-      DocumentReviewer.UI.updateDebugInfo(`Failed to generate alternative approaches: ${error.message}`);
-      
-      // Get document info
-      const doc = DocumentReviewer.DocumentProcessor.getCurrentDocument();
-      
-      // Return fallback approaches
-      alternativeApproaches = [
-        {
-          title: "Fallback detailed approach",
-          rationale: "Provide more comprehensive information",
-          prompt: `
-            Answer this query about the document with extra detail:
-            QUERY: "${query}"
-            
-            DOCUMENT CONTENT:
-            ${doc.text.length > 4000 ? doc.text.substring(0, 4000) + "... [truncated]" : doc.text}
-          `
-        }
-      ];
-      
-      return alternativeApproaches;
-    }
-  }
-
-  // Execute an alternative approach
-  async function executeAlternativeApproach(query, approach) {
-    DocumentReviewer.UI.updateDebugInfo(`Executing alternative approach: ${approach.title || 'Unnamed approach'}`);
-    
-    try {
-      // Call LLM with the alternative prompt
-      const response = await DocumentReviewer.APIService.callLLM(approach.prompt || `
-        Alternative approach to answer query about document:
-        QUERY: "${query}"
-        
-        DOCUMENT TITLE: "${DocumentReviewer.DocumentProcessor.getCurrentDocument().title}"
-        
-        DOCUMENT CONTENT:
-        ${DocumentReviewer.DocumentProcessor.getCurrentDocument().text.length > 6000 ? 
-          DocumentReviewer.DocumentProcessor.getCurrentDocument().text.substring(0, 6000) + "... [truncated]" : 
-          DocumentReviewer.DocumentProcessor.getCurrentDocument().text}
-        
-        Provide a comprehensive response that directly answers the query.
-      `);
-      
-      // Show in UI temporarily
-      DocumentReviewer.UI.displayResponse(response);
-      
-      // Generate quality assessment
-      const qualityAssessment = await estimateResponseQuality(query, response);
-      const quality = qualityAssessment.quality || 7;  
-      const confidence = qualityAssessment.confidence || 0.7;
-      
-      return {
-        finalResponse: response,
-        confidence: confidence,
-        quality: quality
-      };
-    } catch (error) {
-      console.error("Error executing alternative approach:", error);
-      DocumentReviewer.UI.updateDebugInfo(`Alternative approach failed: ${error.message}`);
-      
-      // Return default values
-      return {
-        finalResponse: "Error generating alternative response",
-        confidence: 0.5,
-        quality: 5
-      };
-    }
-  }
-
-  // Get state
+  /**
+   * Get status information about the meta-engine
+   */
   function getState() {
     return {
       metaQuality,
@@ -963,6 +1108,8 @@
     executeMetaPromptProcess,
     executeMetaStages,
     addSelfCritiqueToUI,
+    executeEnhancedAgentApproach,
+    generateSelfCritique,
     getState
   };
 })();

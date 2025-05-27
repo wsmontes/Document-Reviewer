@@ -158,11 +158,17 @@
     }
     
     try {
+      // Verify that MetaEngine exists before calling processQuery
+      if (!DocumentReviewer.MetaEngine || typeof DocumentReviewer.MetaEngine.processQuery !== 'function') {
+        throw new Error('MetaEngine or processQuery function is not available');
+      }
+      
       // Process the query using the meta-prompt engine, with the final query (original or default)
       await DocumentReviewer.MetaEngine.processQuery(finalQuery);
     } catch (error) {
       console.error('Error during processing:', error);
       DocumentReviewer.UI.addSystemMessage(`Error: ${error.message || 'An error occurred during processing'}`);
+      DocumentReviewer.UI.updateDebugInfo(`Error: ${error.message || 'Unknown error'}`);
     }
     
     // Reset processing state
